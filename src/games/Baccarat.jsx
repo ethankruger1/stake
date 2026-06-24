@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { CreditCard } from 'lucide-react'
+import { CreditCard, RefreshCw } from 'lucide-react'
 import { useWallet } from '../context/WalletContext'
 import BetInput from '../components/UI/BetInput'
 
@@ -21,40 +21,75 @@ function handPoints(hand) {
   return hand.reduce((a, c) => a + cardPoints(c), 0) % 10
 }
 
-function needsThirdCard(hand, isPlayer, otherTotal) {
+function needsThirdCard(hand, isPlayer, playerThirdVal) {
   const total = handPoints(hand)
-  if (isPlayer) {
-    return total <= 5
-  } else {
-    // Banker drawing rules
-    const playerThird = otherTotal
-    if (total <= 2) return true
-    if (total === 3) return playerThird !== 8
-    if (total === 4) return playerThird >= 2 && playerThird <= 7
-    if (total === 5) return playerThird >= 4 && playerThird <= 7
-    if (total === 6) return playerThird === 6 || playerThird === 7
-    return false
-  }
+  if (isPlayer) return total <= 5
+  if (total <= 2) return true
+  if (total === 3) return playerThirdVal !== 8
+  if (total === 4) return playerThirdVal >= 2 && playerThirdVal <= 7
+  if (total === 5) return playerThirdVal >= 4 && playerThirdVal <= 7
+  if (total === 6) return playerThirdVal === 6 || playerThirdVal === 7
+  return false
 }
 
-function BacCard({ card }) {
-  if (!card) return <div className="w-12 h-16 rounded-lg border border-dashed border-vault-border opacity-30" />
+const CHIP_VALUES = [1, 5, 25, 100, 500]
+const CHIP_COLORS = { 1: '#6b7280', 5: '#ef4444', 25: '#3b82f6', 100: '#a855f7', 500: '#f59e0b' }
+
+function BacCard({ card, delay = 0 }) {
+  if (!card) {
+    return (
+      <div className="w-16 h-22 rounded-xl border-2 border-dashed border-white/10 bg-white/5"
+        style={{ minHeight: '88px' }} />
+    )
+  }
   const isRed = RED_SUITS.includes(card.suit)
+  const color = isRed ? '#dc2626' : '#1f2937'
+
   return (
-    <div className="w-12 h-16 rounded-lg border border-gray-200 bg-white flex flex-col justify-between p-1 shadow-md select-none">
-      <div className={`text-[10px] font-black leading-none ${isRed ? 'text-red-600' : 'text-black'}`}>
+    <div
+      className="rounded-xl border border-gray-200 bg-white flex flex-col justify-between shadow-xl select-none relative overflow-hidden"
+      style={{
+        width: '64px', minHeight: '88px',
+        padding: '6px',
+        animation: `bacDeal 0.35s cubic-bezier(0.34,1.4,0.64,1) ${delay}ms both`,
+      }}>
+      <style>{`
+        @keyframes bacDeal {
+          from { transform: translateY(-40px) rotate(-8deg) scale(0.7); opacity: 0; }
+          to   { transform: translateY(0) rotate(0) scale(1); opacity: 1; }
+        }
+      `}</style>
+      <div className="leading-tight font-black text-xs" style={{ color, fontFamily: 'Georgia, serif' }}>
         <div>{card.val}</div>
         <div>{card.suit}</div>
       </div>
-      <div className={`text-base font-black self-center ${isRed ? 'text-red-600' : 'text-black'}`}>{card.suit}</div>
+      <div className="text-2xl font-black self-center" style={{ color, fontFamily: 'Georgia, serif' }}>
+        {card.suit}
+      </div>
+    </div>
+  )
+}
+
+function ScoreBadge({ score, isWinner, isNatural }) {
+  return (
+    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full font-black text-sm transition-all ${
+      isNatural
+        ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/40'
+        : isWinner
+        ? 'bg-vault-green text-black shadow-lg shadow-vault-green/40'
+        : 'bg-vault-bg border border-vault-border text-white'
+    }`}>
+      <span>{score}</span>
+      {isNatural && <span className="text-[10px] font-bold">NAT</span>}
+      {isWinner && !isNatural && <span className="text-[10px] font-bold">WIN</span>}
     </div>
   )
 }
 
 const BET_OPTIONS = [
-  { key: 'player', label: 'Player', payout: 2, color: 'text-blue-400', bg: 'bg-blue-500/20 border-blue-500/40', desc: '1:1' },
-  { key: 'banker', label: 'Banker', payout: 1.95, color: 'text-red-400', bg: 'bg-red-500/20 border-red-500/40', desc: '0.95:1' },
-  { key: 'tie', label: 'Tie', payout: 9, color: 'text-vault-green', bg: 'bg-vault-green/20 border-vault-green/40', desc: '8:1' },
+  { key: 'player', label: 'Player', desc: 'Pays 1:1', color: '#3b82f6', bg: 'bg-blue-500/20', border: 'border-blue-500/50' },
+  { key: 'tie',    label: 'Tie',    desc: 'Pays 8:1', color: '#3bc117', bg: 'bg-vault-green/20', border: 'border-vault-green/50' },
+  { key: 'banker', label: 'Banker', desc: 'Pays 0.95:1', color: '#ef4444', bg: 'bg-red-500/20', border: 'border-red-500/50' },
 ]
 
 export default function Baccarat() {
@@ -63,100 +98,113 @@ export default function Baccarat() {
   const [betOn, setBetOn] = useState('player')
   const [playerHand, setPlayerHand] = useState([])
   const [bankerHand, setBankerHand] = useState([])
-  const [phase, setPhase] = useState('bet') // bet | dealing | done
+  const [phase, setPhase] = useState('bet')
   const [result, setResult] = useState(null)
   const [history, setHistory] = useState([])
   const [stats, setStats] = useState({ player: 0, banker: 0, tie: 0 })
 
   const deal = useCallback(async () => {
-    if (bet <= 0 || bet > balance) return
+    if (bet <= 0 || bet > balance || phase === 'dealing') return
     if (!placeBet(bet)) return
     setPhase('dealing')
     setResult(null)
+    setPlayerHand([])
+    setBankerHand([])
 
     const deck = createDeck()
     let d = [...deck]
 
-    const pHand = [d.shift(), d.shift()]
-    const bHand = [d.shift(), d.shift()]
+    // Deal initial 2 cards each
+    const card1 = d.shift()
+    const card2 = d.shift()
+    const card3 = d.shift()
+    const card4 = d.shift()
 
-    setPlayerHand(pHand)
-    setBankerHand(bHand)
-    await new Promise(r => setTimeout(r, 600))
+    setPlayerHand([card1])
+    await new Promise(r => setTimeout(r, 200))
+    setBankerHand([card2])
+    await new Promise(r => setTimeout(r, 200))
+    setPlayerHand([card1, card3])
+    await new Promise(r => setTimeout(r, 200))
+    setBankerHand([card2, card4])
+    await new Promise(r => setTimeout(r, 500))
 
-    let finalP = [...pHand]
-    let finalB = [...bHand]
+    let finalP = [card1, card3]
+    let finalB = [card2, card4]
     const pTotal = handPoints(finalP)
     const bTotal = handPoints(finalB)
 
-    // Natural
-    if (pTotal >= 8 || bTotal >= 8) {
-      // Stand
-    } else {
-      // Player third card
+    if (pTotal < 8 && bTotal < 8) {
       if (needsThirdCard(finalP, true, null)) {
         const thirdP = d.shift()
         finalP = [...finalP, thirdP]
         setPlayerHand(finalP)
-        await new Promise(r => setTimeout(r, 400))
+        await new Promise(r => setTimeout(r, 450))
 
-        // Banker third card based on player's third
         if (needsThirdCard(finalB, false, cardPoints(thirdP))) {
           finalB = [...finalB, d.shift()]
           setBankerHand(finalB)
-          await new Promise(r => setTimeout(r, 400))
+          await new Promise(r => setTimeout(r, 450))
         }
       } else if (needsThirdCard(finalB, false, null)) {
         finalB = [...finalB, d.shift()]
         setBankerHand(finalB)
-        await new Promise(r => setTimeout(r, 400))
+        await new Promise(r => setTimeout(r, 450))
       }
     }
 
     const fp = handPoints(finalP)
     const fb = handPoints(finalB)
+    const isNaturalP = (pTotal >= 8 || bTotal >= 8) && fp === pTotal
+    const isNaturalB = (pTotal >= 8 || bTotal >= 8) && fb === bTotal
 
-    let winner, payout = 0, msg
-    if (fp > fb) { winner = 'player'; msg = 'Player Wins!' }
-    else if (fb > fp) { winner = 'banker'; msg = 'Banker Wins!' }
-    else { winner = 'tie'; msg = "It's a Tie!" }
+    let winner
+    if (fp > fb) winner = 'player'
+    else if (fb > fp) winner = 'banker'
+    else winner = 'tie'
 
-    const option = BET_OPTIONS.find(o => o.key === betOn)
+    const PAYOUTS = { player: 2, banker: 1.95, tie: 9 }
+    let payout = 0, wonBet = false
+
     if (winner === betOn) {
-      payout = +(bet * option.payout).toFixed(2)
+      payout = +(bet * PAYOUTS[betOn]).toFixed(2)
       addWin(payout)
-      addNotification(`🃏 ${msg} Won $${payout.toFixed(2)}!`, 'win')
+      wonBet = true
     } else if (winner === 'tie' && betOn !== 'tie') {
       payout = bet
       addWin(payout)
-      addNotification(`🃏 Tie — Bet returned!`, 'win')
-    } else {
-      addNotification(`🃏 ${msg} Lost $${bet.toFixed(2)}`, 'loss')
     }
 
-    addBetHistory({ id: Date.now(), game: 'Baccarat', bet: bet.toFixed(2), mult: (payout / bet).toFixed(2), payout: payout.toFixed(2), won: payout > bet, time: Date.now() })
-    setResult({ winner, msg, fp, fb, payout, won: payout > bet || (payout === bet && winner === 'tie') })
-    setHistory(h => [winner[0].toUpperCase(), ...h.slice(0, 19)])
+    const msg = winner === 'player' ? 'Player Wins!' : winner === 'banker' ? 'Banker Wins!' : "It's a Tie!"
+    if (wonBet) addNotification(`🃏 ${msg} Won $${payout.toFixed(2)}!`, 'win')
+    else if (winner === 'tie' && betOn !== 'tie') addNotification('🃏 Tie — Bet returned!', 'win')
+    else addNotification(`🃏 ${msg} Lost $${bet.toFixed(2)}`, 'loss')
+
+    addBetHistory({ id: Date.now(), game: 'Baccarat', bet: bet.toFixed(2), mult: (payout / bet || 0).toFixed(2), payout: payout.toFixed(2), won: wonBet, time: Date.now() })
+    setResult({ winner, fp, fb, payout, wonBet, isNaturalP, isNaturalB })
+    setHistory(h => [winner[0].toUpperCase(), ...h.slice(0, 24)])
     setStats(s => ({ ...s, [winner]: s[winner] + 1 }))
     setPhase('done')
-  }, [bet, balance, betOn, placeBet, addWin, addBetHistory, addNotification])
+  }, [bet, balance, betOn, phase, placeBet, addWin, addBetHistory, addNotification])
+
+  const chosenOpt = BET_OPTIONS.find(o => o.key === betOn)
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
-          <CreditCard size={20} className="text-green-400" />
+        <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+          <CreditCard size={20} className="text-emerald-400" />
         </div>
         <div>
           <h1 className="font-black text-xl">Baccarat</h1>
-          <p className="text-xs text-gray-500">Classic Casino</p>
+          <p className="text-xs text-gray-500">Classic Casino · 8 Decks</p>
         </div>
         <div className="ml-auto flex gap-1">
-          {history.slice(0, 15).map((h, i) => (
-            <span key={i} className={`w-5 h-5 rounded-full text-[9px] font-black flex items-center justify-center ${
-              h === 'P' ? 'bg-blue-500/30 text-blue-400 border border-blue-500/50' :
-              h === 'B' ? 'bg-red-500/30 text-red-400 border border-red-500/50' :
-              'bg-vault-green/30 text-vault-green border border-vault-green/50'
+          {history.slice(0, 14).map((h, i) => (
+            <span key={i} className={`w-5 h-5 rounded-full text-[9px] font-black flex items-center justify-center border ${
+              h === 'P' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40' :
+              h === 'B' ? 'bg-red-500/20 text-red-400 border-red-500/40' :
+              'bg-vault-green/20 text-vault-green border-vault-green/40'
             }`}>{h}</span>
           ))}
         </div>
@@ -166,99 +214,169 @@ export default function Baccarat() {
         <div className="panel space-y-4">
           <BetInput value={bet} onChange={setBet} disabled={phase === 'dealing'} />
 
+          {/* Bet selection */}
           <div>
             <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 block">Bet On</label>
             <div className="space-y-2">
               {BET_OPTIONS.map(opt => (
-                <button
-                  key={opt.key}
-                  onClick={() => phase !== 'dealing' && setBetOn(opt.key)}
-                  className={`w-full py-3 rounded-xl border font-bold text-sm transition-all ${
-                    betOn === opt.key ? `${opt.bg} ${opt.color}` : 'bg-vault-bg border-vault-border text-gray-400 hover:text-white'
+                <button key={opt.key} onClick={() => phase !== 'dealing' && setBetOn(opt.key)}
+                  className={`w-full py-3 px-4 rounded-xl border font-bold text-sm transition-all flex items-center justify-between ${
+                    betOn === opt.key
+                      ? `${opt.bg} ${opt.border} border`
+                      : 'bg-vault-bg border-vault-border hover:border-white/20 text-gray-400 hover:text-white'
                   }`}
-                >
-                  <div>{opt.label}</div>
-                  <div className="text-xs opacity-60">{opt.desc}</div>
+                  style={{ color: betOn === opt.key ? opt.color : undefined }}>
+                  <span>{opt.label}</span>
+                  <span className="text-xs opacity-60">{opt.desc}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="panel bg-vault-bg"><div className="text-blue-400 font-bold text-lg">{stats.player}</div><div className="text-gray-500">Player</div></div>
-            <div className="panel bg-vault-bg"><div className="text-vault-green font-bold text-lg">{stats.tie}</div><div className="text-gray-500">Tie</div></div>
-            <div className="panel bg-vault-bg"><div className="text-red-400 font-bold text-lg">{stats.banker}</div><div className="text-gray-500">Banker</div></div>
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-1.5 text-center">
+            <div className="panel bg-vault-bg py-2.5">
+              <div className="text-blue-400 font-black text-xl">{stats.player}</div>
+              <div className="text-gray-500 text-xs">Player</div>
+            </div>
+            <div className="panel bg-vault-bg py-2.5">
+              <div className="text-vault-green font-black text-xl">{stats.tie}</div>
+              <div className="text-gray-500 text-xs">Tie</div>
+            </div>
+            <div className="panel bg-vault-bg py-2.5">
+              <div className="text-red-400 font-black text-xl">{stats.banker}</div>
+              <div className="text-gray-500 text-xs">Banker</div>
+            </div>
           </div>
 
-          {result && (
-            <div className={`panel text-center ${result.won ? 'border-vault-green/50 bg-green-900/20' : 'border-red-500/30 bg-red-900/10'}`}>
-              <div className="font-black text-lg">{result.msg}</div>
-              {result.payout > 0 ? <div className="text-vault-green font-black text-xl mt-1">+${result.payout.toFixed(2)}</div> : <div className="text-red-400 mt-1">No win</div>}
+          {/* Result */}
+          {result && phase === 'done' && (
+            <div className={`rounded-xl p-3 text-center border transition-all ${
+              result.wonBet ? 'bg-vault-green/10 border-vault-green/30' :
+              result.payout === bet ? 'bg-yellow-500/10 border-yellow-500/30' :
+              'bg-red-900/15 border-red-500/20'
+            }`}>
+              <div className="font-black text-base capitalize">{result.winner} Wins!</div>
+              {result.payout > 0 ? (
+                <div className={`font-black text-xl mt-0.5 ${result.wonBet ? 'text-vault-green' : 'text-yellow-400'}`}>
+                  {result.wonBet ? `+$${(result.payout - bet).toFixed(2)}` : 'Bet Returned'}
+                </div>
+              ) : (
+                <div className="text-red-400 text-sm mt-0.5">Lost ${bet.toFixed(2)}</div>
+              )}
             </div>
           )}
 
-          <button onClick={deal} disabled={phase === 'dealing' || bet <= 0 || bet > balance} className="btn-primary w-full py-3">
-            {phase === 'dealing' ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Dealing...
-              </span>
-            ) : phase === 'done' ? 'Deal Again' : 'Deal'}
+          <button onClick={deal} disabled={phase === 'dealing' || bet <= 0 || bet > balance}
+            className="btn-primary w-full py-3 font-black text-lg flex items-center justify-center gap-2">
+            {phase === 'dealing'
+              ? <><span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Dealing...</>
+              : <><RefreshCw size={18} /> {phase === 'done' ? 'Deal Again' : 'Deal Cards'}</>
+            }
           </button>
         </div>
 
-        <div className="panel space-y-6">
-          {/* Banker */}
-          <div className={`panel transition-all ${result?.winner === 'banker' ? 'border-red-500/50 bg-red-900/10' : ''}`}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-bold text-red-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-red-400" /> Banker
-              </span>
-              {bankerHand.length > 0 && (
-                <span className={`text-2xl font-black ${result?.winner === 'banker' ? 'text-red-400' : 'text-white'}`}>
-                  {handPoints(bankerHand)}
-                </span>
+        {/* Table */}
+        <div className="panel relative overflow-hidden"
+          style={{
+            background: 'radial-gradient(ellipse at center, #1a3a2a 0%, #0f2318 60%, #0b1a12 100%)',
+            borderColor: '#2a4a35',
+          }}>
+
+          {/* Felt texture */}
+          <div className="absolute inset-0 opacity-[0.03]"
+            style={{ backgroundImage: 'repeating-linear-gradient(0deg, #fff 0, #fff 1px, transparent 0, transparent 8px), repeating-linear-gradient(90deg, #fff 0, #fff 1px, transparent 0, transparent 8px)' }} />
+
+          <div className="relative z-10 space-y-6 p-2">
+            {/* Banker hand */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-lg shadow-red-500/50" />
+                  <span className="font-black text-red-400 text-sm tracking-wide">BANKER</span>
+                  {result?.winner === 'banker' && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500 text-white">WINNER</span>
+                  )}
+                </div>
+                {bankerHand.length > 0 && (
+                  <ScoreBadge
+                    score={handPoints(bankerHand)}
+                    isWinner={result?.winner === 'banker'}
+                    isNatural={result?.isNaturalB}
+                  />
+                )}
+              </div>
+              <div className="flex gap-3 min-h-[96px] items-end">
+                {bankerHand.length > 0 ? (
+                  bankerHand.map((card, i) => (
+                    <BacCard key={i} card={card} delay={i * 150} />
+                  ))
+                ) : (
+                  [0, 1, 2].map(i => <BacCard key={i} card={null} />)
+                )}
+              </div>
+            </div>
+
+            {/* VS divider */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 border-t border-white/10" />
+              <div className="text-white/30 font-black text-sm tracking-widest">VS</div>
+              <div className="flex-1 border-t border-white/10" />
+              {result?.winner === 'tie' && (
+                <div className="absolute left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-vault-green text-black text-xs font-black">
+                  TIE!
+                </div>
               )}
             </div>
-            <div className="flex gap-2">
-              {[0, 1, 2].map(i => <BacCard key={i} card={bankerHand[i]} />)}
+
+            {/* Player hand */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-lg shadow-blue-500/50" />
+                  <span className="font-black text-blue-400 text-sm tracking-wide">PLAYER</span>
+                  {result?.winner === 'player' && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500 text-white">WINNER</span>
+                  )}
+                </div>
+                {playerHand.length > 0 && (
+                  <ScoreBadge
+                    score={handPoints(playerHand)}
+                    isWinner={result?.winner === 'player'}
+                    isNatural={result?.isNaturalP}
+                  />
+                )}
+              </div>
+              <div className="flex gap-3 min-h-[96px] items-end">
+                {playerHand.length > 0 ? (
+                  playerHand.map((card, i) => (
+                    <BacCard key={i} card={card} delay={i * 150 + 100} />
+                  ))
+                ) : (
+                  [0, 1, 2].map(i => <BacCard key={i} card={null} />)
+                )}
+              </div>
             </div>
+
+            {/* Your bet indicator */}
+            {phase !== 'bet' && (
+              <div className="flex justify-center pt-2">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/30 border border-white/10 text-xs">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: chosenOpt?.color }} />
+                  <span className="text-gray-300">Bet on <span className="font-bold text-white">{chosenOpt?.label}</span></span>
+                  <span className="text-gray-500">·</span>
+                  <span className="text-white font-bold">${bet.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+
+            {phase === 'bet' && (
+              <div className="text-center text-white/20 py-4">
+                <CreditCard size={36} className="mx-auto mb-2" />
+                <p className="text-sm">Select your bet and deal to begin</p>
+              </div>
+            )}
           </div>
-
-          <div className="flex items-center gap-3">
-            <div className="flex-1 border-t border-vault-border" />
-            <span className="text-gray-600 font-bold">VS</span>
-            <div className="flex-1 border-t border-vault-border" />
-          </div>
-
-          {/* Player */}
-          <div className={`panel transition-all ${result?.winner === 'player' ? 'border-blue-500/50 bg-blue-900/10' : ''}`}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-bold text-blue-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-400" /> Player
-              </span>
-              {playerHand.length > 0 && (
-                <span className={`text-2xl font-black ${result?.winner === 'player' ? 'text-blue-400' : 'text-white'}`}>
-                  {handPoints(playerHand)}
-                </span>
-              )}
-            </div>
-            <div className="flex gap-2">
-              {[0, 1, 2].map(i => <BacCard key={i} card={playerHand[i]} />)}
-            </div>
-          </div>
-
-          {!result && phase === 'bet' && (
-            <div className="text-center text-gray-600">
-              <CreditCard size={40} className="mx-auto mb-2 opacity-30" />
-              <p>Select a bet and deal to play</p>
-            </div>
-          )}
-
-          {result?.winner === 'tie' && (
-            <div className="text-center text-vault-green font-black text-xl animate-pulse">
-              🤝 Tie! Both scored {result.fp}
-            </div>
-          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { TrendingUp, TrendingDown, Zap } from 'lucide-react'
+import { TrendingUp, TrendingDown, Users } from 'lucide-react'
 import { useWallet } from '../context/WalletContext'
 import BetInput from '../components/UI/BetInput'
 
@@ -9,70 +9,138 @@ function generateCrashPoint() {
   return Math.max(1.00, +(Math.floor(100 / (1 - r * 0.99)) / 100).toFixed(2))
 }
 
-const HISTORY_COLORS = (v) => v >= 10 ? 'text-purple-400' : v >= 2 ? 'text-vault-green' : 'text-red-400'
+const FAKE_USERS = ['Dragon88','CryptoKing','MoonBet','LuckyAce','WhaleBet','GoldFish','NightOwl','SunRider','RocketBoy','DiamondH','CrashBro','AceHigh']
+
+function historyColor(v) {
+  if (v >= 10) return 'text-purple-400 bg-purple-500/20 border-purple-500/30'
+  if (v >= 2)  return 'text-vault-green bg-vault-green/20 border-vault-green/30'
+  return 'text-red-400 bg-red-500/20 border-red-500/30'
+}
+
+// Live chart SVG
+function CrashChart({ phase, multiplier, crashed, chartPoints }) {
+  const W = 500, H = 280
+  const padding = { left: 40, bottom: 30, right: 10, top: 10 }
+  const iW = W - padding.left - padding.right
+  const iH = H - padding.top - padding.bottom
+
+  const maxX = Math.max(chartPoints.length, 10)
+  const maxY = Math.max(multiplier * 1.1, 2)
+
+  const toSvg = (xi, yi) => ({
+    x: padding.left + (xi / maxX) * iW,
+    y: H - padding.bottom - ((yi - 1) / (maxY - 1)) * iH,
+  })
+
+  const pts = chartPoints.map((y, i) => toSvg(i, y))
+  const pathD = pts.length > 1
+    ? `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ')
+    : ''
+
+  const fillD = pts.length > 1
+    ? `M ${padding.left} ${H - padding.bottom} L ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ') + ` L ${pts[pts.length-1].x} ${H - padding.bottom} Z`
+    : ''
+
+  const lineColor = crashed ? '#ef4444' : '#3bc117'
+  const last = pts[pts.length - 1]
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full">
+      <defs>
+        <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={lineColor} stopOpacity="0.25" />
+          <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+        </linearGradient>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="2" result="blur" />
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+
+      {/* Grid lines */}
+      {[1, 1.5, 2, 3, 5, 10].filter(v => v <= maxY).map(v => {
+        const { y } = toSvg(0, v)
+        return (
+          <g key={v}>
+            <line x1={padding.left} y1={y} x2={W - padding.right} y2={y}
+              stroke="#ffffff08" strokeWidth={1} />
+            <text x={padding.left - 4} y={y + 4} textAnchor="end" fill="#4a5568"
+              fontSize={9} fontFamily="monospace">{v}×</text>
+          </g>
+        )
+      })}
+
+      {/* Fill area */}
+      {fillD && <path d={fillD} fill="url(#chartFill)" />}
+
+      {/* Main line */}
+      {pathD && (
+        <path d={pathD} stroke={lineColor} strokeWidth={2.5} fill="none"
+          strokeLinecap="round" strokeLinejoin="round"
+          filter={crashed ? 'none' : 'url(#glow)'}
+        />
+      )}
+
+      {/* Current point dot */}
+      {last && !crashed && (
+        <g>
+          <circle cx={last.x} cy={last.y} r={6} fill={lineColor} opacity={0.3} />
+          <circle cx={last.x} cy={last.y} r={4} fill={lineColor} />
+        </g>
+      )}
+
+      {/* X axis */}
+      <line x1={padding.left} y1={H - padding.bottom} x2={W - padding.right} y2={H - padding.bottom}
+        stroke="#1f2937" strokeWidth={1} />
+      <line x1={padding.left} y1={padding.top} x2={padding.left} y2={H - padding.bottom}
+        stroke="#1f2937" strokeWidth={1} />
+    </svg>
+  )
+}
 
 export default function Crash() {
   const { balance, placeBet, addWin, addBetHistory, addNotification } = useWallet()
   const [bet, setBet] = useState(1)
   const [autoCashout, setAutoCashout] = useState(2.0)
   const [useAutoCashout, setUseAutoCashout] = useState(false)
-  const [phase, setPhase] = useState('waiting') // waiting | running | crashed
+  const [phase, setPhase] = useState('waiting')
   const [multiplier, setMultiplier] = useState(1.00)
   const [crashPoint, setCrashPoint] = useState(null)
   const [cashedOut, setCashedOut] = useState(false)
   const [betPlaced, setBetPlaced] = useState(false)
-  const [history, setHistory] = useState([5.23, 1.05, 2.41, 8.77, 1.12, 14.3, 1.01, 3.56, 1.88, 22.1])
+  const [history, setHistory] = useState([5.23,1.05,2.41,8.77,1.12,14.3,1.01,3.56,1.88,22.1])
   const [countdown, setCountdown] = useState(5)
-  const [players, setPlayers] = useState(() =>
-    Array.from({ length: 8 }, (_, i) => ({
-      name: ['CryptoKing', 'Dragon88', 'MoonBet', 'LuckyAce', 'WhaleBet', 'GoldFish', 'NightOwl', 'SunRider'][i],
-      bet: (Math.random() * 500 + 10).toFixed(2),
-      cashedAt: null,
-    }))
-  )
+  const [chartPoints, setChartPoints] = useState([1])
+  const [players, setPlayers] = useState([])
   const intervalRef = useRef(null)
-  const startTimeRef = useRef(null)
   const crashRef = useRef(null)
+  const startTimeRef = useRef(null)
+  const betRef = useRef(bet)
+  const betPlacedRef = useRef(false)
+  const cashedOutRef = useRef(false)
 
-  const runCountdown = useCallback(() => {
-    setPhase('waiting')
-    setCountdown(5)
-    setMultiplier(1.00)
-    setCashedOut(false)
-    setBetPlaced(false)
-    const cp = generateCrashPoint()
-    setCrashPoint(cp)
-    crashRef.current = cp
+  useEffect(() => { betRef.current = bet }, [bet])
 
-    setPlayers(Array.from({ length: Math.floor(Math.random() * 8 + 5) }, (_, i) => ({
-      name: ['CryptoKing', 'Dragon88', 'MoonBet', 'LuckyAce', 'WhaleBet', 'GoldFish', 'NightOwl', 'SunRider', 'RocketBoy', 'DiamondH'][i % 10],
-      bet: (Math.random() * 500 + 10).toFixed(2),
-      cashedAt: null,
-    })))
-
-    let count = 5
-    const cdInterval = setInterval(() => {
-      count -= 1
-      setCountdown(count)
-      if (count <= 0) {
-        clearInterval(cdInterval)
-        startCrash()
-      }
-    }, 1000)
-  }, [])
+  const genPlayers = () => Array.from({ length: Math.floor(Math.random() * 10 + 6) }, (_, i) => ({
+    name: FAKE_USERS[i % FAKE_USERS.length],
+    bet: (Math.random() * 800 + 10).toFixed(2),
+    cashedAt: null,
+  }))
 
   const startCrash = useCallback(() => {
     setPhase('running')
+    setChartPoints([1])
     startTimeRef.current = Date.now()
 
     intervalRef.current = setInterval(() => {
       const elapsed = (Date.now() - startTimeRef.current) / 1000
-      const mult = Math.pow(Math.E, elapsed * 0.07 * Math.log(1.12) * 10)
-      const rounded = +Math.max(1, mult).toFixed(2)
+      const m = Math.pow(Math.E, elapsed * 0.65)
+      const rounded = +Math.max(1, m).toFixed(2)
       setMultiplier(rounded)
+      setChartPoints(prev => [...prev, rounded])
 
       setPlayers(prev => prev.map(p => {
-        if (!p.cashedAt && Math.random() < 0.01) {
+        if (!p.cashedAt && Math.random() < 0.008 * (rounded / 2)) {
           return { ...p, cashedAt: rounded }
         }
         return p
@@ -81,12 +149,39 @@ export default function Crash() {
       if (rounded >= crashRef.current) {
         clearInterval(intervalRef.current)
         setMultiplier(crashRef.current)
+        setChartPoints(prev => [...prev, crashRef.current])
         setPhase('crashed')
         setHistory(h => [crashRef.current, ...h.slice(0, 19)])
-        setTimeout(runCountdown, 3000)
+        if (betPlacedRef.current && !cashedOutRef.current) {
+          addBetHistory({ id: Date.now(), game: 'Crash', bet: betRef.current.toFixed(2), mult: '0.00', payout: '0.00', won: false, time: Date.now() })
+          addNotification(`💥 Crashed at ${crashRef.current}×! Lost $${betRef.current.toFixed(2)}`, 'loss')
+        }
+        setTimeout(runCountdown, 3500)
       }
-    }, 50)
-  }, [runCountdown])
+    }, 80)
+  }, [addBetHistory, addNotification])
+
+  const runCountdown = useCallback(() => {
+    setPhase('waiting')
+    setCountdown(5)
+    setMultiplier(1.00)
+    setCashedOut(false)
+    cashedOutRef.current = false
+    setBetPlaced(false)
+    betPlacedRef.current = false
+    setChartPoints([1])
+    const cp = generateCrashPoint()
+    setCrashPoint(cp)
+    crashRef.current = cp
+    setPlayers(genPlayers())
+
+    let c = 5
+    const cd = setInterval(() => {
+      c--
+      setCountdown(c)
+      if (c <= 0) { clearInterval(cd); startCrash() }
+    }, 1000)
+  }, [startCrash])
 
   useEffect(() => {
     runCountdown()
@@ -95,55 +190,50 @@ export default function Crash() {
 
   useEffect(() => {
     if (phase === 'running' && betPlaced && !cashedOut && useAutoCashout && multiplier >= autoCashout) {
-      handleCashout()
+      cashout()
     }
-  }, [multiplier, phase, betPlaced, cashedOut, useAutoCashout, autoCashout])
+  }, [multiplier])
 
   const placeBetHandler = () => {
     if (phase !== 'waiting' || betPlaced || bet <= 0 || bet > balance) return
     if (!placeBet(bet)) return
     setBetPlaced(true)
+    betPlacedRef.current = true
   }
 
-  const handleCashout = useCallback(() => {
-    if (!betPlaced || cashedOut || phase !== 'running') return
-    const payout = +(bet * multiplier).toFixed(2)
+  const cashout = useCallback(() => {
+    if (!betPlacedRef.current || cashedOutRef.current || phase !== 'running') return
+    const currentMult = multiplier
+    const payout = +(betRef.current * currentMult).toFixed(2)
     addWin(payout)
     setCashedOut(true)
-    addBetHistory({ id: Date.now(), game: 'Crash', bet: bet.toFixed(2), mult: multiplier.toFixed(2), payout: payout.toFixed(2), won: true, time: Date.now() })
-    addNotification(`🚀 Cashed out at ${multiplier.toFixed(2)}x! Won $${payout.toFixed(2)}`, 'win')
-  }, [betPlaced, cashedOut, phase, bet, multiplier, addWin, addBetHistory, addNotification])
+    cashedOutRef.current = true
+    addBetHistory({ id: Date.now(), game: 'Crash', bet: betRef.current.toFixed(2), mult: currentMult.toFixed(2), payout: payout.toFixed(2), won: true, time: Date.now() })
+    addNotification(`🚀 Cashed out ${currentMult.toFixed(2)}×! Won $${payout.toFixed(2)}`, 'win')
+  }, [phase, multiplier, addWin, addBetHistory, addNotification])
 
-  useEffect(() => {
-    if (phase === 'crashed' && betPlaced && !cashedOut) {
-      addBetHistory({ id: Date.now(), game: 'Crash', bet: bet.toFixed(2), mult: '0.00', payout: '0.00', won: false, time: Date.now() })
-      addNotification(`💥 Crashed at ${crashRef.current}x! Lost $${bet.toFixed(2)}`, 'loss')
-    }
-  }, [phase])
-
-  const multColor = phase === 'crashed' ? 'text-red-400' : multiplier >= 2 ? 'text-vault-green' : 'text-white'
+  const multColor = phase === 'crashed' ? 'text-red-400' : multiplier >= 3 ? 'text-purple-400' : multiplier >= 2 ? 'text-vault-green' : 'text-white'
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+      {/* Header + history */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center flex-shrink-0">
           <TrendingUp size={20} className="text-green-400" />
         </div>
         <div>
           <h1 className="font-black text-xl">Crash</h1>
           <p className="text-xs text-gray-500">VaultBet Original</p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          {history.slice(0, 8).map((v, i) => (
-            <span key={i} className={`badge bg-vault-card border border-vault-border font-bold text-xs ${HISTORY_COLORS(v)}`}>
-              {v.toFixed(2)}×
-            </span>
+        <div className="ml-auto flex gap-1.5 flex-wrap">
+          {history.slice(0, 10).map((v, i) => (
+            <span key={i} className={`badge font-black text-xs border ${historyColor(v)}`}>{v.toFixed(2)}×</span>
           ))}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[300px,1fr] gap-6">
-        {/* Controls */}
+      <div className="grid grid-cols-1 lg:grid-cols-[280px,1fr] gap-5">
+        {/* Left panel */}
         <div className="space-y-4">
           <div className="panel space-y-4">
             <BetInput value={bet} onChange={setBet} disabled={phase !== 'waiting' || betPlaced} />
@@ -151,76 +241,62 @@ export default function Crash() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Auto Cashout</label>
-                <button
-                  onClick={() => setUseAutoCashout(v => !v)}
-                  className={`w-10 h-5 rounded-full transition-colors relative ${useAutoCashout ? 'bg-vault-green' : 'bg-vault-border'}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${useAutoCashout ? 'left-5' : 'left-0.5'}`} />
+                <button onClick={() => setUseAutoCashout(v => !v)}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${useAutoCashout ? 'bg-vault-green' : 'bg-vault-border'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow ${useAutoCashout ? 'left-5' : 'left-0.5'}`} />
                 </button>
               </div>
               <div className="relative">
-                <input
-                  type="number"
-                  min="1.01"
-                  step="0.1"
-                  value={autoCashout}
+                <input type="number" min="1.01" step="0.1" value={autoCashout}
                   onChange={e => setAutoCashout(parseFloat(e.target.value) || 2)}
                   disabled={!useAutoCashout}
-                  className="input-field"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">×</span>
+                  className="input-field pr-8 disabled:opacity-40" />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">×</span>
               </div>
             </div>
 
+            {/* Action button */}
             {phase === 'waiting' ? (
-              <button
-                onClick={placeBetHandler}
-                disabled={betPlaced || bet <= 0 || bet > balance}
-                className={`w-full font-bold py-3 rounded-xl transition-all ${
-                  betPlaced ? 'bg-vault-green/20 text-vault-green border border-vault-green/30 cursor-default' : 'btn-primary'
-                }`}
-              >
-                {betPlaced ? `✓ Bet Placed $${bet.toFixed(2)}` : `Bet $${bet.toFixed(2)}`}
+              <button onClick={placeBetHandler} disabled={betPlaced || bet <= 0 || bet > balance}
+                className={`w-full py-3 rounded-xl font-bold transition-all ${betPlaced ? 'bg-vault-green/10 border border-vault-green/30 text-vault-green cursor-default' : 'btn-primary'}`}>
+                {betPlaced ? `✓ Queued — $${bet.toFixed(2)}` : `Bet $${bet.toFixed(2)}`}
               </button>
             ) : phase === 'running' ? (
-              <button
-                onClick={handleCashout}
-                disabled={!betPlaced || cashedOut}
-                className={`w-full font-bold py-3 rounded-xl transition-all ${
-                  !betPlaced ? 'bg-vault-panel text-gray-600 cursor-default border border-vault-border' :
-                  cashedOut ? 'bg-vault-green/20 text-vault-green border border-vault-green/30' :
-                  'btn-gold animate-pulse'
-                }`}
-              >
-                {!betPlaced ? 'Waiting for next round...' :
-                 cashedOut ? `✓ Cashed out $${(bet * multiplier).toFixed(2)}` :
-                 `Cash Out $${(bet * multiplier).toFixed(2)}`}
+              <button onClick={cashout} disabled={!betPlaced || cashedOut}
+                className={`w-full py-3 rounded-xl font-bold transition-all text-lg ${
+                  !betPlaced ? 'bg-vault-panel border border-vault-border text-gray-600 cursor-default' :
+                  cashedOut ? 'bg-vault-green/10 border border-vault-green/30 text-vault-green cursor-default' :
+                  'bg-yellow-500 hover:bg-yellow-400 text-black animate-pulse shadow-lg shadow-yellow-500/30'
+                }`}>
+                {!betPlaced ? 'Waiting for next round' :
+                 cashedOut ? `✓ $${(bet * multiplier).toFixed(2)} secured` :
+                 `Cash Out  $${(bet * multiplier).toFixed(2)}`}
               </button>
             ) : (
-              <button
-                onClick={placeBetHandler}
-                disabled={betPlaced}
-                className="btn-primary w-full py-3"
-              >
+              <button onClick={placeBetHandler} disabled={betPlaced}
+                className={`w-full py-3 rounded-xl font-bold ${betPlaced ? 'bg-vault-green/10 border border-vault-green/30 text-vault-green' : 'btn-primary'}`}>
                 {betPlaced ? '✓ Queued for next round' : 'Bet for Next Round'}
               </button>
             )}
           </div>
 
-          {/* Player list */}
+          {/* Players list */}
           <div className="panel">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Players ({players.length})</h3>
-            <div className="space-y-1 max-h-60 overflow-y-auto">
+            <div className="flex items-center gap-2 mb-2">
+              <Users size={14} className="text-gray-500" />
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Players ({players.length})</span>
+            </div>
+            <div className="space-y-0.5 max-h-52 overflow-y-auto">
               {players.map((p, i) => (
-                <div key={i} className="flex items-center justify-between text-xs py-1">
+                <div key={i} className="grid grid-cols-3 items-center text-xs py-1 px-1 rounded hover:bg-vault-hover/30">
                   <span className="text-gray-400 truncate">{p.name}</span>
-                  <span className="text-gray-300">${p.bet}</span>
+                  <span className="text-gray-500 text-center">${p.bet}</span>
                   {p.cashedAt ? (
-                    <span className="text-vault-green font-bold">{p.cashedAt.toFixed(2)}×</span>
+                    <span className="text-vault-green font-bold text-right">{p.cashedAt.toFixed(2)}×</span>
                   ) : phase === 'crashed' ? (
-                    <span className="text-red-400">💥</span>
+                    <span className="text-red-400 text-right">💥</span>
                   ) : (
-                    <span className="text-gray-600">—</span>
+                    <span className="text-gray-700 text-right">—</span>
                   )}
                 </div>
               ))}
@@ -228,64 +304,52 @@ export default function Crash() {
           </div>
         </div>
 
-        {/* Graph */}
-        <div className={`panel flex flex-col items-center justify-center min-h-80 relative overflow-hidden transition-all duration-300 ${
-          phase === 'crashed' ? 'border-red-500/50 bg-red-900/5' : ''
-        }`}>
-          {phase === 'waiting' ? (
-            <div className="text-center">
-              <div className="text-6xl font-black text-gray-600 mb-2">{countdown}s</div>
-              <p className="text-gray-500">Next round starting...</p>
-              <div className="flex gap-1 justify-center mt-4">
-                {[...Array(5)].map((_, i) => (
-                  <div key={i} className={`w-8 h-1 rounded-full transition-all duration-1000 ${i < 5 - countdown ? 'bg-vault-green' : 'bg-vault-border'}`} />
-                ))}
+        {/* Chart */}
+        <div className={`panel overflow-hidden relative transition-colors duration-500 ${phase === 'crashed' ? 'border-red-500/30 bg-red-900/5' : ''}`}>
+          {/* Multiplier overlay */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+            {phase === 'waiting' ? (
+              <div className="text-center">
+                <div className="text-6xl font-black text-gray-700">{countdown}</div>
+                <div className="text-gray-600 mt-1 text-sm">Starting in...</div>
+                <div className="flex gap-1 justify-center mt-3">
+                  {[...Array(5)].map((_,i) => (
+                    <div key={i} className={`h-1 w-8 rounded-full transition-all duration-1000 ${i < 5-countdown ? 'bg-vault-green' : 'bg-vault-border'}`} />
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="text-center">
-              <div className={`font-black transition-all duration-100 ${
-                phase === 'crashed' ? 'text-7xl text-red-400' : `text-8xl ${multColor}`
-              }`}>
-                {multiplier.toFixed(2)}×
+            ) : (
+              <div className="text-center">
+                <div className={`font-black transition-all duration-100 drop-shadow-2xl ${
+                  phase === 'crashed' ? 'text-6xl text-red-400' : `text-7xl ${multColor}`
+                }`} style={{ textShadow: phase !== 'crashed' ? `0 0 30px currentColor` : 'none' }}>
+                  {multiplier.toFixed(2)}×
+                </div>
+                {phase === 'crashed' && (
+                  <div className="mt-2 flex items-center gap-2 justify-center">
+                    <TrendingDown size={20} className="text-red-400" />
+                    <span className="text-red-400 font-bold">CRASHED</span>
+                  </div>
+                )}
+                {phase === 'running' && cashedOut && (
+                  <div className="mt-1 text-vault-green text-sm font-bold">✓ Cashed out!</div>
+                )}
               </div>
-              {phase === 'crashed' ? (
-                <div className="mt-4">
-                  <div className="text-red-400 font-bold text-xl flex items-center gap-2 justify-center">
-                    <TrendingDown size={24} /> CRASHED
-                  </div>
-                  <p className="text-gray-500 text-sm mt-1">Next round in 3s...</p>
-                </div>
-              ) : cashedOut ? (
-                <div className="mt-4 text-vault-green font-bold text-lg">
-                  ✓ Cashed out at {multiplier.toFixed(2)}×
-                </div>
-              ) : betPlaced ? (
-                <div className="mt-4">
-                  <div className="text-vault-green font-semibold">
-                    Current profit: ${(bet * multiplier - bet).toFixed(2)}
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 text-gray-500 text-sm">Place your bet!</div>
-              )}
+            )}
+          </div>
 
-              {/* Animated rocket */}
-              {phase === 'running' && (
-                <div className="mt-8 text-5xl animate-bounce">🚀</div>
-              )}
+          {/* Chart */}
+          <div className="h-72 opacity-80">
+            <CrashChart phase={phase} multiplier={multiplier} crashed={phase === 'crashed'} chartPoints={chartPoints} />
+          </div>
+
+          {/* Rocket */}
+          {phase === 'running' && (
+            <div className="absolute bottom-4 right-4 text-4xl" style={{ animation: 'float 1.5s ease-in-out infinite alternate' }}>
+              🚀
+              <style>{`@keyframes float { from { transform: translateY(0) rotate(-45deg); } to { transform: translateY(-12px) rotate(-45deg); } }`}</style>
             </div>
           )}
-
-          {/* Background grid lines */}
-          <div className="absolute inset-0 opacity-5 pointer-events-none">
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="absolute border-t border-white w-full" style={{ top: `${i * 12.5}%` }} />
-            ))}
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="absolute border-l border-white h-full" style={{ left: `${i * 12.5}%` }} />
-            ))}
-          </div>
         </div>
       </div>
     </div>
