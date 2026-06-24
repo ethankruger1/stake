@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { HashRouter as BrowserRouter, Routes, Route } from 'react-router-dom'
 import { WalletProvider } from './context/WalletContext'
 import Sidebar from './components/Layout/Sidebar'
 import Header from './components/Layout/Header'
